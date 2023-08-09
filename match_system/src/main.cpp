@@ -79,7 +79,7 @@ class Pool
                 }
         }
     private: //private用于存储所有的玩家，用vector存储玩家
-        vector<User> users; //users由user填充，user的变量类型是match_service中定义的结构体User，其具有id, name, score三种属性
+        vector<User> users; //users由user填充，user的变量类型是match.thrift中定义的结构体User，其具有id, name, score三种属性
 }pool;
 
 class MatchHandler : virtual public MatchIf {
