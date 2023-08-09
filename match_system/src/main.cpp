@@ -2,10 +2,13 @@
 // You should copy it to another filename to avoid overwriting it.
 
 #include "match_server/Match.h"
+#include "save_client/Save.h"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/server/TSimpleServer.h>
 #include <thrift/transport/TServerSocket.h>
 #include <thrift/transport/TBufferTransports.h>
+#include <thrift/transport/TTransportUtils.h>
+#include <thrift/transport/TSocket.h>
 
 #include <iostream>
 #include <thread>
@@ -20,6 +23,7 @@ using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::server;
 
 using namespace  ::match_service;
+using namespace ::save_service;
 using namespace std;
 
 //任务类型
@@ -45,7 +49,29 @@ class Pool
         void save_result(int a, int b) //传入两个人的id即可
         {
             printf("Match Result: %d %d\n", a, b);
+
+            //localhost改为myserver的IP地址123.57.67.128
+            std::shared_ptr<TTransport> socket(new TSocket("123.57.67.128", 9090));
+            std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+            std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+            //CalculatorClient client(protocol);改为
+            SaveClient client(protocol);
+
+
+            try {
+                transport->open();
+
+                int res = client.save_data("acs_11385", "bbc7baa1", a, b);
+
+                if (!res) puts("success");
+                else puts("failed");
+
+                transport->close();
+            } catch (TException& tx) {
+                cout << "ERROR: " << tx.what() << endl;
+            }
         }
+
         //匹配函数
         void match()
         {
@@ -60,6 +86,7 @@ class Pool
                 save_result(a.id, b.id); //此处yxc忘记传入参数了，问题已修复
             }
         }
+
         //添加一个玩家
         void add(User user)
         {
@@ -71,13 +98,14 @@ class Pool
         {
             //通过user id来删除玩家，需要遍历所有user
             for (uint32_t i = 0; i < users.size(); i ++ ) 
-            //users.size()返回的是无符号整数类型，故此处写int i会有warning，写工程最好0 warning
+                //users.size()返回的是无符号整数类型，故此处写int i会有warning，写工程最好0 warning
                 if (users[i].id = user.id)
                 {
                     users.erase(users.begin() + i);
                     break; //只删除一个玩家
                 }
         }
+
     private: //private用于存储所有的玩家，用vector存储玩家
         vector<User> users;
 }pool;
