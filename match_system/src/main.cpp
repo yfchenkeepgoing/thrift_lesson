@@ -8,6 +8,11 @@
 #include <thrift/transport/TBufferTransports.h>
 
 #include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <vector>
+#include <queue>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -16,6 +21,66 @@ using namespace ::apache::thrift::server;
 
 using namespace  ::match_service;
 using namespace std;
+
+//任务类型
+struct Task
+{
+    User user; //用户
+    string type; //操作类型
+};
+
+//消息队列
+struct MessageQueue
+{
+    queue<Task> q; //定义一普通队列，其中存储各种task
+    mutex m; //唯一的锁
+    condition_variable cv; //条件变量
+}message_queue;
+
+//定义一个玩家池
+class Pool
+{
+    public:
+        //保存匹配结果的函数
+        void save_result(int a, int b) //传入两个人的id即可
+        {
+            printf("Match Result: %d %d\n", a, b);
+        }
+        //匹配函数
+        void match()
+        {
+            //先写一个简单的版本，当users中的人数大于1时，将他们匹配在一起
+            while (users.size() > 1)
+            {
+                auto a = users[0], b = users[1]; //将第一个人和第二个人匹配在一起
+                users.erase(users.begin()); //删掉第一个人
+                users.erase(users.begin()); //删掉第一个人后，第二个人变成第一个人，再删掉第一个人即可
+
+                //匹配完成后需要将结果保存，因此还需要save函数
+                save_result(a.id, b.id); //此处yxc忘记传入参数了，问题已修复
+            }
+        }
+        //添加一个玩家
+        void add(User user)
+        {
+            users.push_back(user);
+        }
+
+        //删除一个玩家
+        void remove(User user)
+        {
+            //通过user id来删除玩家，需要遍历所有user
+            for (uint32_t i = 0; i < users.size(); i ++ ) 
+            //users.size()返回的是无符号整数类型，故此处写int i会有warning，写工程最好0 warning
+                if (users[i].id = user.id)
+                {
+                    users.erase(users.begin() + i);
+                    break; //只删除一个玩家
+                }
+        }
+    private: //private用于存储所有的玩家，用vector存储玩家
+        vector<User> users;
+}pool;
 
 class MatchHandler : virtual public MatchIf {
     public:
@@ -27,6 +92,16 @@ class MatchHandler : virtual public MatchIf {
             // Your implementation goes here
             printf("add_user\n");
 
+            //加锁：通过消息队列中定义的唯一的锁将消息队列锁起来，这样不用显示解锁
+            //因为当函数执行完后，变量会消失，变量消失后会自动解锁
+            unique_lock<mutex> lck(message_queue.m);
+
+            message_queue.q.push({user, "add"});
+
+            //执行add user时，队列不空了，因此写一个唤醒函数唤醒被卡住的线程
+            message_queue.cv.notify_all(); //通知所有被条件变量卡住的线程，唤醒这些线程
+            //也可以写作message_queue.cv.notify_one();即只唤醒所有被卡住的线程中的一个，由于此处只有一个线程被卡住，因此唤醒一个线程和唤醒所有线程没有区别
+
             return 0;
         }
 
@@ -34,10 +109,61 @@ class MatchHandler : virtual public MatchIf {
             // Your implementation goes here
             printf("remove_user\n");
 
+            //加锁，同上
+            unique_lock<mutex> lck(message_queue.m);
+
+            message_queue.q.push({user, "remove"});
+
+            //唤醒被卡住的线程
+            message_queue.cv.notify_all();
+
             return 0;
         }
 
 };
+
+//消费者函数，需要一个单独的线程
+void consume_task()
+{
+    //死循环，不断地看当前是否有玩家匹配在一起
+    while (true)
+    {
+        //消费者函数由于也要涉及到队列的读写操作，因此也需要加锁
+        unique_lock<mutex> lck(message_queue.m);
+
+        //游戏刚上线没人来，队列大概率是空的，若队列是空的，就会跳过本次循环，释放掉锁然后下一次再获得这个锁
+        //这样会导致死循环，导致cpu占用率达到100%，会占用所有的系统资源
+        //因此若发现队列是空，则应该把这个线程阻塞住，直到有新的玩家进来再继续执行
+        //用条件变量可实现对线程的阻塞
+        if (message_queue.q.empty()) //若消息队列为空
+        {
+            message_queue.cv.wait(lck); //先将锁释掉，然后线程被卡住，一直卡到在其他地方将这个条件变量唤醒
+        }
+        else
+        {
+            auto task = message_queue.q.front(); //取出队头
+            message_queue.q.pop(); //删去队头
+
+            //解锁，若do task后再解锁，意味着我们持有锁的时间太长，在执行do task的时候就不能add user和remove user，导致效率低下
+            //因此处理完共享的变量后一定要及时解锁
+            lck.unlock();
+
+            // do task
+            // 若task的类型是添加或者删除
+            if (task.type == "add") pool.add(task.user);
+            else if (task.type == "remove") pool.remove(task.user);
+
+            //每次add或者remove后匹配一遍
+            pool.match();
+        }
+    }
+}
+
+//生产者函数，也需要一个单独的线程，生产者就是add_user和remove_user，每次add或者remove就会给生产者和消费者提供一个任务，生产者和消费者之间需要一个通信的媒介
+//通信媒介可以用消费队列，虽然每种语言都有现成的消费队列，但手动实现也不复杂，这里我们会手动实现一个消费队列
+//实现消费队列需要锁（mutex），锁是并行编程中的基本概念，互斥锁（英语：Mutual exclusion，缩写Mutex）是一种用于多线程编程中，防止两条线程同时对同一公共资源（比如全局变量）进行读写的机制。
+//锁有两种操作，即p操作和v操作。p操作指争取锁的操作，争取到了锁就可以运行程序了。
+
 
 int main(int argc, char **argv) {
     int port = 9090;
@@ -50,6 +176,10 @@ int main(int argc, char **argv) {
     TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
 
     cout << "Start Match Server" << endl;
+
+    //给死循环单独开一个线程，可以记下这种写法，这个线程名为匹配线程，传入函数名称（指针）即可，死循环也一定需要一个单独的线程，否则其后面的部分无法正常运行得到结果
+    //若业务很多，可能用到更多的线程
+    thread matching_thread(consume_task);
 
     server.serve();
     return 0;
