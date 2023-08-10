@@ -9,6 +9,10 @@
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TTransportUtils.h>
 #include <thrift/transport/TSocket.h>
+#include <thrift/concurrency/ThreadManager.h>
+#include <thrift/concurrency/ThreadFactory.h>
+#include <thrift/TToString.h>
+#include <thrift/server/TThreadedServer.h>
 
 #include <iostream>
 #include <thread>
@@ -55,7 +59,7 @@ class Pool
             std::shared_ptr<TTransport> socket(new TSocket("123.57.67.128", 9090));
             std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
             std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-            //CalculatorClient client(protocol);改为
+            //MatchClient client(protocol);改为
             SaveClient client(protocol);
 
 
@@ -80,7 +84,7 @@ class Pool
             {
                 //User& a和User& b是排序的参数，即两名玩家是排序的参数
                 sort(users.begin(), users.end(), [&](User& a, User& b){
-                    return a.score < b.score;  //按分值排序
+                        return a.score < b.score;  //按分值排序
                         });
 
                 //避免死循环，定义一个flag用于判断
@@ -91,12 +95,12 @@ class Pool
                     auto a = users[i - 1], b = users[i];
                     if (b.score - a.score <= 50)  //若二者分数之差小于50
                     {
-                       users.erase(users.begin() + i - 1, users.begin() + i + 1); //左闭右开区间，相当于从i-1删起，删到i
-                       save_result(a.id, b.id); //调用save result函数存储匹配结果
+                        users.erase(users.begin() + i - 1, users.begin() + i + 1); //左闭右开区间，相当于从i-1删起，删到i
+                        save_result(a.id, b.id); //调用save result函数存储匹配结果
 
-                       flag = false;
+                        flag = false;
 
-                       break;  //每次匹配完即跳出循环
+                        break;  //每次匹配完即跳出循环
                     }
                 }
 
@@ -167,6 +171,26 @@ class MatchHandler : virtual public MatchIf {
 
 };
 
+class MatchCloneFactory : virtual public MatchIfFactory {
+    public:
+        ~MatchCloneFactory() override = default;
+        MatchIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) override
+        {
+            std::shared_ptr<TSocket> sock = std::dynamic_pointer_cast<TSocket>(connInfo.transport);
+            /*
+            cout << "Incoming connection\n";
+            cout << "\tSocketInfo: "  << sock->getSocketInfo() << "\n";
+            cout << "\tPeerHost: "    << sock->getPeerHost() << "\n";
+            cout << "\tPeerAddress: " << sock->getPeerAddress() << "\n";
+            cout << "\tPeerPort: "    << sock->getPeerPort() << "\n";
+            */
+            return new MatchHandler;
+        }
+        void releaseHandler(MatchIf* handler) override {
+            delete handler;
+        }
+};
+
 //消费者函数，需要一个单独的线程
 void consume_task()
 {
@@ -214,14 +238,11 @@ void consume_task()
 
 
 int main(int argc, char **argv) {
-    int port = 9090;
-    ::std::shared_ptr<MatchHandler> handler(new MatchHandler());
-    ::std::shared_ptr<TProcessor> processor(new MatchProcessor(handler));
-    ::std::shared_ptr<TServerTransport> serverTransport(new TServerSocket(port));
-    ::std::shared_ptr<TTransportFactory> transportFactory(new TBufferedTransportFactory());
-    ::std::shared_ptr<TProtocolFactory> protocolFactory(new TBinaryProtocolFactory());
-
-    TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
+    TThreadedServer server(
+            std::make_shared<MatchProcessorFactory>(std::make_shared<MatchCloneFactory>()),
+            std::make_shared<TServerSocket>(9090), //port
+            std::make_shared<TBufferedTransportFactory>(),
+            std::make_shared<TBinaryProtocolFactory>());
 
     cout << "Start Match Server" << endl;
 
