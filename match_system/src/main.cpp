@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <vector>
 #include <queue>
+#include <unistd.h>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -75,15 +76,31 @@ class Pool
         //匹配函数
         void match()
         {
-            //先写一个简单的版本，当users中的人数大于1时，将他们匹配在一起
             while (users.size() > 1)
             {
-                auto a = users[0], b = users[1]; //将第一个人和第二个人匹配在一起
-                users.erase(users.begin()); //删掉第一个人
-                users.erase(users.begin()); //删掉第一个人后，第二个人变成第一个人，再删掉第一个人即可
+                //User& a和User& b是排序的参数，即两名玩家是排序的参数
+                sort(users.begin(), users.end(), [&](User& a, User& b){
+                    return a.score < b.score;  //按分值排序
+                        });
 
-                //匹配完成后需要将结果保存，因此还需要save函数
-                save_result(a.id, b.id); //此处yxc忘记传入参数了，问题已修复
+                //避免死循环，定义一个flag用于判断
+                bool flag = true;
+                //用无符号整数，否则会报warning，下标从1开始，因为是比较当前玩家和前一名玩家的分数
+                for (uint32_t i = 1; i < users.size(); i ++ )
+                {
+                    auto a = users[i - 1], b = users[i];
+                    if (b.score - a.score <= 50)  //若二者分数之差小于50
+                    {
+                       users.erase(users.begin() + i - 1, users.begin() + i + 1); //左闭右开区间，相当于从i-1删起，删到i
+                       save_result(a.id, b.id); //调用save result函数存储匹配结果
+
+                       flag = false;
+
+                       break;  //每次匹配完即跳出循环
+                    }
+                }
+
+                if (flag) break; //若循环一遍发现没有两个玩家可以匹配在一起，则退出循环
             }
         }
 
@@ -165,7 +182,10 @@ void consume_task()
         //用条件变量可实现对线程的阻塞
         if (message_queue.q.empty()) //若消息队列为空
         {
-            message_queue.cv.wait(lck); //先将锁释掉，然后线程被卡住，一直卡到在其他地方将这个条件变量唤醒
+            //message_queue.cv.wait(lck); //先将锁释掉，然后线程被卡住，一直卡到在其他地方将这个条件变量唤醒
+            lck.unlock(); //直接解锁
+            pool.match();
+            sleep(1); //每一秒钟尝试匹配一次
         }
         else
         {
