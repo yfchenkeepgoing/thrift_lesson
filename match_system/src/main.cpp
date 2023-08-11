@@ -77,33 +77,55 @@ class Pool
             }
         }
 
+        bool check_match(uint32_t i, uint32_t j)
+        {
+            //要求a能够匹配b，b也能匹配a
+            auto a = users[i], b = users[j];
+
+            int dt = abs(a.score - b.score);  //a和b分差的绝对值
+
+            int a_max_dif = wt[i] * 50; //a允许的最大分数差距
+            int b_max_dif = wt[j] * 50; //a允许的最大分数差距
+
+            //dt需要同时在a所允许的最大范围内和b所允许的最大的范围内
+            return dt <= a_max_dif && dt <= b_max_dif;
+        }
+
         //匹配函数
         void match()
         {
+            for (uint32_t i = 0; i < wt.size(); i ++ )
+                wt[i] ++ ; //匹配一次，等待秒数+1
+
             while (users.size() > 1)
             {
-                //User& a和User& b是排序的参数，即两名玩家是排序的参数
-                sort(users.begin(), users.end(), [&](User& a, User& b){
-                        return a.score < b.score;  //按分值排序
-                        });
-
+                //排序会打乱玩家顺序，因此不排序，采用两重循环匹配的方式
                 //避免死循环，定义一个flag用于判断
                 bool flag = true;
                 //用无符号整数，否则会报warning，下标从1开始，因为是比较当前玩家和前一名玩家的分数
-                for (uint32_t i = 1; i < users.size(); i ++ )
+                for (uint32_t i = 0; i < users.size(); i ++ )
                 {
-                    auto a = users[i - 1], b = users[i];
-                    if (b.score - a.score <= 50)  //若二者分数之差小于50
+                    for (uint32_t j = i + 1; j < users.size(); j ++ )
                     {
-                        users.erase(users.begin() + i - 1, users.begin() + i + 1); //左闭右开区间，相当于从i-1删起，删到i
-                        save_result(a.id, b.id); //调用save result函数存储匹配结果
+                        //看玩家i和玩家j能否匹配在一起
+                        auto a = users[i], b = users[j];
+                        if (check_match(i, j))
+                        {
+                            //删去玩家i和玩家j，先删后面的j，再删后面的i，先删前面的玩家会导致后面的玩家下标变化
+                            users.erase(users.begin() + j);
+                            users.erase(users.begin() + i);
 
-                        flag = false;
+                            //删去相应玩家的waiting time
+                            wt.erase(wt.begin() + j);
+                            wt.erase(wt.begin() + i);
 
-                        break;  //每次匹配完即跳出循环
+                            save_result(a.id, b.id); //存储匹配结果
+                            flag = false;
+                            break;  //完成匹配后立即break
+                        }
                     }
+                    if (!flag) break; //若flag为flase，说明已经发生过匹配，直接退出循环
                 }
-
                 if (flag) break; //若循环一遍发现没有两个玩家可以匹配在一起，则退出循环
             }
         }
@@ -112,6 +134,7 @@ class Pool
         void add(User user)
         {
             users.push_back(user);
+            wt.push_back(0); //对应的位置加入一个0，表示等待的时间为0
         }
 
         //删除一个玩家
@@ -123,12 +146,15 @@ class Pool
                 if (users[i].id = user.id)
                 {
                     users.erase(users.begin() + i);
+                    wt.erase(wt.begin() + i); //删除玩家时，将该玩家的wt也删除掉
                     break; //只删除一个玩家
                 }
         }
 
     private: //private用于存储所有的玩家，用vector存储玩家
         vector<User> users; //users由user填充，user的变量类型是match.thrift中定义的结构体User，其具有id, name, score三种属性
+        vector<int> wt; //waiting time，等待的时间，单位：s
+
 }pool;
 
 class MatchHandler : virtual public MatchIf {
@@ -208,7 +234,7 @@ void consume_task()
         {
             //message_queue.cv.wait(lck); //先将锁释掉，然后线程被卡住，一直卡到在其他地方将这个条件变量唤醒
             lck.unlock(); //直接解锁
-            pool.match();
+            pool.match(); //只在此处匹配，能够保证匹配一次等待1秒再匹配下一次
             sleep(1); //每一秒钟尝试匹配一次
         }
         else
@@ -225,8 +251,10 @@ void consume_task()
             if (task.type == "add") pool.add(task.user);
             else if (task.type == "remove") pool.remove(task.user);
 
+            /*删去，否则每add或remove user时秒数都会加1
             //每次add或者remove后匹配一遍
             pool.match();
+            */
         }
     }
 }
