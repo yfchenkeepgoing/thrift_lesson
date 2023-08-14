@@ -1,2 +1,5 @@
 ### Linux Fundamentals Course
 #### thrift lesson
+An game matchmaking system was implemented using Thrift, consisting of three nodes: the "match_system" folder on the local server, the "game" folder on the local server, and the data storage system on a remote server. The "match_system" folder primarily houses the implementation of the match server and save client, while the "game" folder mainly contains the match client implementation. The remote server invokes the pre-encapsulated save server.
+
+This system simulates the process of matching players in a game. When "add user" and "remove user" operations are performed through the match client, the match server calculates the matching results based on the difference in player scores and the time of matchmaking initiation. It prints the matching results and stores them on the remote server. As time progresses, the allowed matchmaking range gradually expands. The technology stack for this project mainly involves using Thrift to facilitate calling CPP functions from another folder or a server using Python.
