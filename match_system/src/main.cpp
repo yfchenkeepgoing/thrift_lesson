@@ -143,7 +143,7 @@ class Pool
             //通过user id来删除玩家，需要遍历所有user
             for (uint32_t i = 0; i < users.size(); i ++ ) 
                 //users.size()返回的是无符号整数类型，故此处写int i会有warning，写工程最好0 warning
-                if (users[i].id = user.id)
+                if (users[i].id == user.id) //bug fixed
                 {
                     users.erase(users.begin() + i);
                     wt.erase(wt.begin() + i); //删除玩家时，将该玩家的wt也删除掉
